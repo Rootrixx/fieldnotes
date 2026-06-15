@@ -1,5 +1,16 @@
+import { useEffect, useState } from 'react';
 import type React from 'react';
-import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import {
+  ActivityIndicator,
+  Modal,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
+import * as Print from 'expo-print';
+import * as Sharing from 'expo-sharing';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 
@@ -19,6 +30,10 @@ const WebViewComponent = (() => {
 
 function joinValues(values: string[]) {
   return values.filter(Boolean).join(', ');
+}
+
+function getPdfDialogTitle(sheet: ContextSheet) {
+  return `Share ${sheet.title || 'context sheet'} as PDF`;
 }
 
 function StructuredFallback({ sheet }: { sheet: ContextSheet }) {
@@ -125,7 +140,57 @@ export function ContextSheetDetailSheet({
   onClose: () => void;
   sheet: ContextSheet | null;
 }) {
+  const [isSharingPdf, setIsSharingPdf] = useState(false);
+  const [shareNotice, setShareNotice] = useState<AppNotice | null>(null);
   const renderedHtml = sheet ? renderContextSheetHtml(sheet.templateHtml, sheet.data) : null;
+  const visibleNotice = shareNotice ?? notice;
+
+  useEffect(() => {
+    setShareNotice(null);
+    setIsSharingPdf(false);
+  }, [sheet?.id]);
+
+  async function handleSharePdf() {
+    if (!sheet || !renderedHtml || isSharingPdf) {
+      return;
+    }
+
+    setShareNotice(null);
+    setIsSharingPdf(true);
+
+    try {
+      const isSharingAvailable = await Sharing.isAvailableAsync();
+
+      if (!isSharingAvailable) {
+        setShareNotice({
+          tone: 'error',
+          text: 'PDF sharing is not available on this device.',
+        });
+        return;
+      }
+
+      const pdfFile = await Print.printToFileAsync({
+        html: renderedHtml,
+        base64: false,
+      });
+
+      await Sharing.shareAsync(pdfFile.uri, {
+        dialogTitle: getPdfDialogTitle(sheet),
+        mimeType: 'application/pdf',
+        UTI: 'com.adobe.pdf',
+      });
+    } catch (error) {
+      setShareNotice({
+        tone: 'error',
+        text:
+          error instanceof Error
+            ? error.message
+            : 'Could not prepare this context sheet PDF for sharing.',
+      });
+    } finally {
+      setIsSharingPdf(false);
+    }
+  }
 
   return (
     <Modal animationType="slide" onRequestClose={onClose} visible={Boolean(sheet)}>
@@ -142,23 +207,48 @@ export function ContextSheetDetailSheet({
                   </Text>
                 </View>
 
-                <Pressable
-                  accessibilityRole="button"
-                  onPress={onClose}
-                  style={({ pressed }) => [
-                    styles.closeButton,
-                    pressed && styles.actionPressed,
-                  ]}
-                >
-                  <Icon color="#2f241f" name="x" size={18} />
-                </Pressable>
+                <View style={styles.headerActions}>
+                  <Pressable
+                    accessibilityLabel="Share context sheet as PDF"
+                    accessibilityRole="button"
+                    disabled={!renderedHtml || isSharingPdf}
+                    onPress={() => {
+                      void handleSharePdf();
+                    }}
+                    style={({ pressed }) => [
+                      styles.shareButton,
+                      (!renderedHtml || isSharingPdf) && styles.headerButtonDisabled,
+                      pressed && styles.actionPressed,
+                    ]}
+                  >
+                    {isSharingPdf ? (
+                      <ActivityIndicator color="#fff7ef" size="small" />
+                    ) : (
+                      <>
+                        <Icon color="#fff7ef" name="share-2" size={15} />
+                        <Text style={styles.shareButtonLabel}>Share PDF</Text>
+                      </>
+                    )}
+                  </Pressable>
+
+                  <Pressable
+                    accessibilityRole="button"
+                    onPress={onClose}
+                    style={({ pressed }) => [
+                      styles.headerButton,
+                      pressed && styles.actionPressed,
+                    ]}
+                  >
+                    <Icon color="#2f241f" name="x" size={18} />
+                  </Pressable>
+                </View>
               </View>
 
               {WebViewComponent && renderedHtml ? (
                 <View style={styles.webviewScreen}>
-                  {notice ? (
+                  {visibleNotice ? (
                     <View style={styles.noticeWrap}>
-                      <NoticeBanner notice={notice} />
+                      <NoticeBanner notice={visibleNotice} />
                     </View>
                   ) : null}
 
@@ -183,7 +273,7 @@ export function ContextSheetDetailSheet({
                   contentContainerStyle={styles.content}
                   showsVerticalScrollIndicator={false}
                 >
-                  {notice ? <NoticeBanner notice={notice} /> : null}
+                  {visibleNotice ? <NoticeBanner notice={visibleNotice} /> : null}
 
                   {!WebViewComponent ? (
                     <NoticeBanner
@@ -230,7 +320,7 @@ const styles = StyleSheet.create({
   titleWrap: {
     flex: 1,
     minWidth: 0,
-    paddingRight: 12,
+    paddingRight: 10,
   },
   title: {
     color: '#1f1614',
@@ -239,7 +329,27 @@ const styles = StyleSheet.create({
     letterSpacing: -0.4,
     lineHeight: 24,
   },
-  closeButton: {
+  headerActions: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    flexShrink: 0,
+    gap: 8,
+  },
+  shareButton: {
+    alignItems: 'center',
+    backgroundColor: '#ab4d38',
+    borderRadius: 16,
+    flexDirection: 'row',
+    gap: 6,
+    minHeight: 36,
+    paddingHorizontal: 12,
+  },
+  shareButtonLabel: {
+    color: '#fff7ef',
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  headerButton: {
     alignItems: 'center',
     backgroundColor: '#efe3d6',
     borderRadius: 16,
@@ -247,6 +357,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     flexShrink: 0,
     width: 36,
+  },
+  headerButtonDisabled: {
+    opacity: 0.45,
   },
   scroll: {
     flex: 1,

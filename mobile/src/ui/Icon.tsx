@@ -21,6 +21,7 @@ type IconName =
   | 'log-out'
   | 'refresh-cw'
   | 'x'
+  | 'share-2'
   | 'chevron-right';
 
 export function Icon({

@@ -18,6 +18,8 @@
     "expo-asset": "~12.0.12",
     "expo-audio": "~1.1.1",
     "expo-file-system": "~19.0.21",
+    "expo-print": "~15.0.8",
+    "expo-sharing": "~14.0.8",
     "expo-sqlite": "~16.0.10",
     "expo-status-bar": "~3.0.9",
     "react": "19.1.0",
