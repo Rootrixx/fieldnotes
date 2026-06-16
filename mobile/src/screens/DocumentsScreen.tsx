@@ -7,10 +7,17 @@ import {
   Text,
   View,
 } from 'react-native';
+import * as DocumentPicker from 'expo-document-picker';
+import * as FileSystem from 'expo-file-system/legacy';
 
-import { createContextSheet, listContextSheets } from '../lib/contextSheets';
+import {
+  createContextSheet,
+  importContextSheetTemplate,
+  listContextSheets,
+  listContextSheetTemplates,
+} from '../lib/contextSheets';
 import { formatDate } from '../lib/voiceNoteUi';
-import type { ContextSheet, VoiceNote } from '../types';
+import type { ContextSheet, ContextSheetTemplate, VoiceNote } from '../types';
 import type { AppNotice } from '../ui/NoticeBanner';
 import { NoticeBanner } from '../ui/NoticeBanner';
 import { Icon } from '../ui/Icon';
@@ -58,13 +65,30 @@ export function DocumentsScreen({
   const [isLoadingSheets, setIsLoadingSheets] = useState(accountConnected);
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
+  const [isImportingTemplate, setIsImportingTemplate] = useState(false);
   const [selectedNoteIds, setSelectedNoteIds] = useState<string[]>([]);
+  const [templates, setTemplates] = useState<ContextSheetTemplate[]>([]);
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
   const [notice, setNotice] = useState<AppNotice | null>(null);
   const readyNotes = useMemo(() => getReadyNotes(notes), [notes]);
+  const selectedTemplate =
+    templates.find((template) => template.id === selectedTemplateId) ?? templates[0] ?? null;
 
   async function refreshContextSheets() {
     const loadedSheets = await listContextSheets();
     setContextSheets(loadedSheets);
+  }
+
+  async function refreshTemplates() {
+    const loadedTemplates = await listContextSheetTemplates();
+    setTemplates(loadedTemplates);
+    setSelectedTemplateId((currentTemplateId) => {
+      if (currentTemplateId && loadedTemplates.some((template) => template.id === currentTemplateId)) {
+        return currentTemplateId;
+      }
+
+      return loadedTemplates[0]?.id ?? null;
+    });
   }
 
   useEffect(() => {
@@ -80,10 +104,24 @@ export function DocumentsScreen({
       setIsLoadingSheets(true);
 
       try {
-        const loadedSheets = await listContextSheets();
+        const [loadedSheets, loadedTemplates] = await Promise.all([
+          listContextSheets(),
+          listContextSheetTemplates(),
+        ]);
 
         if (isMounted) {
           setContextSheets(loadedSheets);
+          setTemplates(loadedTemplates);
+          setSelectedTemplateId((currentTemplateId) => {
+            if (
+              currentTemplateId &&
+              loadedTemplates.some((template) => template.id === currentTemplateId)
+            ) {
+              return currentTemplateId;
+            }
+
+            return loadedTemplates[0]?.id ?? null;
+          });
         }
       } catch (error) {
         if (isMounted) {
@@ -117,6 +155,65 @@ export function DocumentsScreen({
     );
   }
 
+  function toggleSelectedTemplate(templateId: string) {
+    setSelectedTemplateId((currentTemplateId) =>
+      currentTemplateId === templateId ? null : templateId
+    );
+  }
+
+  async function handleImportContextSheetTemplate() {
+    if (isImportingTemplate) {
+      return;
+    }
+
+    setNotice(null);
+    setIsImportingTemplate(true);
+
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        copyToCacheDirectory: true,
+        multiple: false,
+        type: ['image/*'],
+      });
+
+      if (result.canceled) {
+        return;
+      }
+
+      const asset = result.assets[0];
+
+      if (!asset?.uri) {
+        throw new Error('The selected context sheet file could not be read.');
+      }
+
+      const base64 = await FileSystem.readAsStringAsync(asset.uri, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+      const template = await importContextSheetTemplate({
+        base64,
+        fileName: asset.name || 'context-sheet-image',
+        mimeType: asset.mimeType || 'image/jpeg',
+      });
+
+      await refreshTemplates();
+      setSelectedTemplateId(template.id);
+      setNotice({
+        tone: 'success',
+        text: `Imported ${template.name}. Select processed notes to generate with it.`,
+      });
+    } catch (error) {
+      setNotice({
+        tone: 'error',
+        text:
+          error instanceof Error
+            ? error.message
+            : 'Could not import this context sheet template.',
+      });
+    } finally {
+      setIsImportingTemplate(false);
+    }
+  }
+
   async function handleCreateContextSheet() {
     const selectedRemoteNoteIds = readyNotes
       .filter((note) => selectedNoteIds.includes(note.id))
@@ -135,13 +232,15 @@ export function DocumentsScreen({
     setIsCreating(true);
 
     try {
-      await createContextSheet(selectedRemoteNoteIds);
+      await createContextSheet(selectedRemoteNoteIds, selectedTemplate?.id ?? null);
       await refreshContextSheets();
       setSelectedNoteIds([]);
       setIsCreateOpen(false);
       setNotice({
         tone: 'success',
-        text: 'Context sheet created from the selected processed notes.',
+        text: selectedTemplate
+          ? `Context sheet created with ${selectedTemplate.name}.`
+          : 'Context sheet created from the selected processed notes.',
       });
     } catch (error) {
       setNotice({
@@ -172,34 +271,59 @@ export function DocumentsScreen({
           </Text>
         </View>
 
-        <Pressable
-          accessibilityRole="button"
-          disabled={
-            !isSupabaseConfigured || !accountConnected || readyNotes.length === 0 || isCreating
-          }
-          onPress={() => {
-            setNotice(null);
-            setIsCreateOpen((currentValue) => !currentValue);
-          }}
-          style={({ pressed }) => [
-            styles.createButton,
-            (!isSupabaseConfigured ||
-              !accountConnected ||
-              readyNotes.length === 0 ||
-              isCreating) &&
-              styles.createButtonDisabled,
-            pressed && styles.actionPressed,
-          ]}
-        >
-          {isCreating ? (
-            <ActivityIndicator color="#fff7ef" size="small" />
-          ) : (
-            <>
-              <Icon color="#fff7ef" name="plus" size={14} />
-              <Text style={styles.createButtonLabel}>Create</Text>
-            </>
-          )}
-        </Pressable>
+        <View style={styles.headerButtons}>
+          <Pressable
+            accessibilityRole="button"
+            disabled={!isSupabaseConfigured || !accountConnected || isImportingTemplate}
+            onPress={() => {
+              void handleImportContextSheetTemplate();
+            }}
+            style={({ pressed }) => [
+              styles.importButton,
+              (!isSupabaseConfigured || !accountConnected || isImportingTemplate) &&
+                styles.createButtonDisabled,
+              pressed && styles.actionPressed,
+            ]}
+          >
+            {isImportingTemplate ? (
+              <ActivityIndicator color="#ab4d38" size="small" />
+            ) : (
+              <>
+                <Icon color="#ab4d38" name="file-text" size={14} />
+                <Text style={styles.importButtonLabel}>Import</Text>
+              </>
+            )}
+          </Pressable>
+
+          <Pressable
+            accessibilityRole="button"
+            disabled={
+              !isSupabaseConfigured || !accountConnected || readyNotes.length === 0 || isCreating
+            }
+            onPress={() => {
+              setNotice(null);
+              setIsCreateOpen((currentValue) => !currentValue);
+            }}
+            style={({ pressed }) => [
+              styles.createButton,
+              (!isSupabaseConfigured ||
+                !accountConnected ||
+                readyNotes.length === 0 ||
+                isCreating) &&
+                styles.createButtonDisabled,
+              pressed && styles.actionPressed,
+            ]}
+          >
+            {isCreating ? (
+              <ActivityIndicator color="#fff7ef" size="small" />
+            ) : (
+              <>
+                <Icon color="#fff7ef" name="plus" size={14} />
+                <Text style={styles.createButtonLabel}>Create</Text>
+              </>
+            )}
+          </Pressable>
+        </View>
       </View>
 
       {notice ? <NoticeBanner notice={notice} /> : null}
@@ -241,6 +365,51 @@ export function DocumentsScreen({
             >
               <Icon color="#735e50" name="x" size={18} />
             </Pressable>
+          </View>
+
+          <View style={styles.templateSection}>
+            <Text style={styles.templateSectionTitle}>Context sheet format</Text>
+
+            {templates.length === 0 ? (
+              <Text style={styles.selectionEmpty}>
+                No context sheet templates are available yet.
+              </Text>
+            ) : (
+              templates.map((template) => {
+                const isSelected = selectedTemplateId === template.id;
+
+                return (
+                  <Pressable
+                    accessibilityRole="button"
+                    key={template.id}
+                    onPress={() => {
+                      toggleSelectedTemplate(template.id);
+                    }}
+                    style={({ pressed }) => [
+                      styles.templateOption,
+                      isSelected && styles.templateOptionSelected,
+                      pressed && styles.actionPressed,
+                    ]}
+                  >
+                    <View style={styles.templateOptionCopy}>
+                      <Text style={styles.templateOptionName}>{template.name}</Text>
+                      <Text style={styles.templateOptionMeta}>
+                        {template.isDefault ? 'Default format' : 'Imported company format'}
+                      </Text>
+                    </View>
+
+                    <View
+                      style={[
+                        styles.checkbox,
+                        isSelected ? styles.checkboxSelected : null,
+                      ]}
+                    >
+                      {isSelected ? <Icon color="#fff7ef" name="check" size={12} /> : null}
+                    </View>
+                  </Pressable>
+                );
+              })
+            )}
           </View>
 
           {readyNotes.length === 0 ? (
@@ -307,7 +476,8 @@ export function DocumentsScreen({
               <ActivityIndicator color="#fff7ef" size="small" />
             ) : (
               <Text style={styles.generateButtonLabel}>
-                Generate from {selectedNoteIds.length}{' '}
+                Generate {selectedTemplate ? selectedTemplate.name : 'context sheet'} from{' '}
+                {selectedNoteIds.length}{' '}
                 {selectedNoteIds.length === 1 ? 'note' : 'notes'}
               </Text>
             )}
@@ -400,6 +570,12 @@ const styles = StyleSheet.create({
     fontSize: 14,
     marginTop: 4,
   },
+  headerButtons: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    flexShrink: 0,
+    gap: 8,
+  },
   createButton: {
     alignItems: 'center',
     backgroundColor: '#ab4d38',
@@ -410,11 +586,28 @@ const styles = StyleSheet.create({
     minHeight: 38,
     paddingHorizontal: 14,
   },
+  importButton: {
+    alignItems: 'center',
+    backgroundColor: '#fff7ef',
+    borderColor: 'rgba(171, 77, 56, 0.28)',
+    borderRadius: 14,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 8,
+    justifyContent: 'center',
+    minHeight: 38,
+    paddingHorizontal: 12,
+  },
   createButtonDisabled: {
     opacity: 0.45,
   },
   createButtonLabel: {
     color: '#fff7ef',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  importButtonLabel: {
+    color: '#ab4d38',
     fontSize: 13,
     fontWeight: '700',
   },
@@ -463,6 +656,43 @@ const styles = StyleSheet.create({
     color: '#7a6557',
     fontSize: 14,
     lineHeight: 20,
+  },
+  templateSection: {
+    gap: 10,
+  },
+  templateSectionTitle: {
+    color: '#201713',
+    fontSize: 15,
+    fontWeight: '800',
+  },
+  templateOption: {
+    alignItems: 'center',
+    backgroundColor: '#fffdfa',
+    borderColor: 'rgba(171, 77, 56, 0.12)',
+    borderRadius: 16,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 12,
+    justifyContent: 'space-between',
+    padding: 12,
+  },
+  templateOptionSelected: {
+    borderColor: '#ab4d38',
+    borderWidth: 1.5,
+  },
+  templateOptionCopy: {
+    flex: 1,
+    gap: 2,
+  },
+  templateOptionName: {
+    color: '#2d211d',
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  templateOptionMeta: {
+    color: '#7a6557',
+    fontSize: 12,
+    fontWeight: '600',
   },
   noteSelectionCard: {
     backgroundColor: '#fffdfa',

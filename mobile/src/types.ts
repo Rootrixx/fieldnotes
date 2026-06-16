@@ -93,3 +93,10 @@ export type ContextSheet = {
   updatedAt: string;
   noteCount: number;
 };
+
+export type ContextSheetTemplate = {
+  id: string;
+  name: string;
+  createdAt: string;
+  isDefault: boolean;
+};
