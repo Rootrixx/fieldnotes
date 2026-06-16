@@ -8,7 +8,6 @@ import {
   Text,
   View,
 } from 'react-native';
-import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 
@@ -23,6 +22,18 @@ import type { ContextSheet, ContextSheetTemplate, VoiceNote } from '../types';
 import type { AppNotice } from '../ui/NoticeBanner';
 import { NoticeBanner } from '../ui/NoticeBanner';
 import { Icon } from '../ui/Icon';
+
+type CameraModule = typeof import('expo-camera');
+type CameraViewInstance = InstanceType<CameraModule['CameraView']>;
+
+const ExpoCamera = (() => {
+  try {
+    return require('expo-camera') as CameraModule;
+  } catch {
+    return null;
+  }
+})();
+const CameraView = ExpoCamera?.CameraView ?? null;
 
 function getContextSheetSummary(sheet: ContextSheet) {
   const siteParts = [sheet.data.site.code, sheet.data.site.name].filter(Boolean);
@@ -77,8 +88,7 @@ export function DocumentsScreen({
   const readyNotes = useMemo(() => getReadyNotes(notes), [notes]);
   const selectedTemplate =
     templates.find((template) => template.id === selectedTemplateId) ?? templates[0] ?? null;
-  const cameraRef = useRef<CameraView | null>(null);
-  const [cameraPermission, requestCameraPermission] = useCameraPermissions();
+  const cameraRef = useRef<CameraViewInstance | null>(null);
 
   async function refreshContextSheets() {
     const loadedSheets = await listContextSheets();
@@ -241,11 +251,17 @@ export function DocumentsScreen({
     setNotice(null);
 
     try {
-      let permission = cameraPermission;
-
-      if (!permission?.granted) {
-        permission = await requestCameraPermission();
+      if (!ExpoCamera?.Camera || !CameraView) {
+        setIsImportOptionsOpen(false);
+        setNotice({
+          tone: 'error',
+          text:
+            'Camera import is not available in Expo Go for this build. Rebuild the iPhone app with npx expo run:ios --device, or use Choose image.',
+        });
+        return;
       }
+
+      const permission = await ExpoCamera.Camera.requestCameraPermissionsAsync();
 
       if (!permission.granted) {
         setNotice({
@@ -701,10 +717,12 @@ export function DocumentsScreen({
             setIsCameraOpen(false);
           }
         }}
-        visible={isCameraOpen}
+        visible={isCameraOpen && Boolean(CameraView)}
       >
         <View style={styles.cameraScreen}>
-          <CameraView ref={cameraRef} facing="back" style={styles.cameraPreview} />
+          {CameraView ? (
+            <CameraView ref={cameraRef} facing="back" style={styles.cameraPreview} />
+          ) : null}
 
           <View style={styles.cameraTopBar}>
             <Pressable
