@@ -9,11 +9,16 @@ import {
   Text,
   View,
 } from 'react-native';
+import * as FileSystem from 'expo-file-system/legacy';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 
+import {
+  createContextSheetCsv,
+  getContextSheetCsvFileName,
+} from '../lib/contextSheetCsv';
 import { renderContextSheetHtml } from '../lib/contextSheetHtml';
 import type { ContextSheet } from '../types';
 import { Icon } from './Icon';
@@ -34,6 +39,10 @@ function joinValues(values: string[]) {
 
 function getPdfDialogTitle(sheet: ContextSheet) {
   return `Share ${sheet.title || 'context sheet'} as PDF`;
+}
+
+function getCsvDialogTitle(sheet: ContextSheet) {
+  return `Share ${sheet.title || 'context sheet'} as CSV`;
 }
 
 function StructuredFallback({ sheet }: { sheet: ContextSheet }) {
@@ -141,6 +150,7 @@ export function ContextSheetDetailSheet({
   sheet: ContextSheet | null;
 }) {
   const [isSharingPdf, setIsSharingPdf] = useState(false);
+  const [isSharingCsv, setIsSharingCsv] = useState(false);
   const [shareNotice, setShareNotice] = useState<AppNotice | null>(null);
   const renderedHtml = sheet ? renderContextSheetHtml(sheet.templateHtml, sheet.data) : null;
   const visibleNotice = shareNotice ?? notice;
@@ -148,6 +158,7 @@ export function ContextSheetDetailSheet({
   useEffect(() => {
     setShareNotice(null);
     setIsSharingPdf(false);
+    setIsSharingCsv(false);
   }, [sheet?.id]);
 
   async function handleSharePdf() {
@@ -192,6 +203,50 @@ export function ContextSheetDetailSheet({
     }
   }
 
+  async function handleShareCsv() {
+    if (!sheet || isSharingCsv) {
+      return;
+    }
+
+    setShareNotice(null);
+    setIsSharingCsv(true);
+
+    try {
+      const isSharingAvailable = await Sharing.isAvailableAsync();
+
+      if (!isSharingAvailable) {
+        setShareNotice({
+          tone: 'error',
+          text: 'CSV sharing is not available on this device.',
+        });
+        return;
+      }
+
+      if (!FileSystem.cacheDirectory) {
+        throw new Error('The device did not provide a writable cache directory.');
+      }
+
+      const csvFileUri = `${FileSystem.cacheDirectory}${getContextSheetCsvFileName(sheet)}`;
+      await FileSystem.writeAsStringAsync(csvFileUri, createContextSheetCsv(sheet));
+
+      await Sharing.shareAsync(csvFileUri, {
+        dialogTitle: getCsvDialogTitle(sheet),
+        mimeType: 'text/csv',
+        UTI: 'public.comma-separated-values-text',
+      });
+    } catch (error) {
+      setShareNotice({
+        tone: 'error',
+        text:
+          error instanceof Error
+            ? error.message
+            : 'Could not prepare this context sheet CSV for sharing.',
+      });
+    } finally {
+      setIsSharingCsv(false);
+    }
+  }
+
   return (
     <Modal animationType="slide" onRequestClose={onClose} visible={Boolean(sheet)}>
       <SafeAreaProvider>
@@ -211,13 +266,14 @@ export function ContextSheetDetailSheet({
                   <Pressable
                     accessibilityLabel="Share context sheet as PDF"
                     accessibilityRole="button"
-                    disabled={!renderedHtml || isSharingPdf}
+                    disabled={!renderedHtml || isSharingPdf || isSharingCsv}
                     onPress={() => {
                       void handleSharePdf();
                     }}
                     style={({ pressed }) => [
                       styles.shareButton,
-                      (!renderedHtml || isSharingPdf) && styles.headerButtonDisabled,
+                      (!renderedHtml || isSharingPdf || isSharingCsv) &&
+                        styles.headerButtonDisabled,
                       pressed && styles.actionPressed,
                     ]}
                   >
@@ -226,7 +282,30 @@ export function ContextSheetDetailSheet({
                     ) : (
                       <>
                         <Icon color="#fff7ef" name="share-2" size={15} />
-                        <Text style={styles.shareButtonLabel}>Share PDF</Text>
+                        <Text style={styles.shareButtonLabel}>PDF</Text>
+                      </>
+                    )}
+                  </Pressable>
+
+                  <Pressable
+                    accessibilityLabel="Share context sheet as CSV"
+                    accessibilityRole="button"
+                    disabled={isSharingPdf || isSharingCsv}
+                    onPress={() => {
+                      void handleShareCsv();
+                    }}
+                    style={({ pressed }) => [
+                      styles.csvButton,
+                      (isSharingPdf || isSharingCsv) && styles.headerButtonDisabled,
+                      pressed && styles.actionPressed,
+                    ]}
+                  >
+                    {isSharingCsv ? (
+                      <ActivityIndicator color="#ab4d38" size="small" />
+                    ) : (
+                      <>
+                        <Icon color="#ab4d38" name="share-2" size={15} />
+                        <Text style={styles.csvButtonLabel}>CSV</Text>
                       </>
                     )}
                   </Pressable>
@@ -326,7 +405,7 @@ const styles = StyleSheet.create({
     color: '#1f1614',
     fontSize: 20,
     fontWeight: '800',
-    letterSpacing: -0.4,
+    letterSpacing: 0,
     lineHeight: 24,
   },
   headerActions: {
@@ -344,8 +423,24 @@ const styles = StyleSheet.create({
     minHeight: 36,
     paddingHorizontal: 12,
   },
+  csvButton: {
+    alignItems: 'center',
+    backgroundColor: '#fff7ef',
+    borderColor: 'rgba(171, 77, 56, 0.28)',
+    borderRadius: 16,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 6,
+    minHeight: 36,
+    paddingHorizontal: 12,
+  },
   shareButtonLabel: {
     color: '#fff7ef',
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  csvButtonLabel: {
+    color: '#ab4d38',
     fontSize: 13,
     fontWeight: '800',
   },

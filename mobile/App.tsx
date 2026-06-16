@@ -48,6 +48,11 @@ import { RecorderSheet } from './src/ui/RecorderSheet';
 import { SettingsSheet } from './src/ui/SettingsSheet';
 
 type AppTab = 'notes' | 'records';
+type RecordingPrompt = {
+  id: string;
+  label: string;
+  helper: string;
+};
 
 const RECORDING_OPTIONS = {
   ...RecordingPresets.HIGH_QUALITY,
@@ -55,6 +60,39 @@ const RECORDING_OPTIONS = {
   numberOfChannels: 1,
   bitRate: 96000,
 };
+
+const RECORDING_PROMPTS: RecordingPrompt[] = [
+  {
+    id: 'context',
+    label: 'Context number and trench',
+    helper: 'Say the context, trench, plan, section, and level if you have them.',
+  },
+  {
+    id: 'soil-color',
+    label: 'Soil color',
+    helper: 'Describe the color clearly, including mottling or changes across the context.',
+  },
+  {
+    id: 'soil-composition',
+    label: 'Soil composition and texture',
+    helper: 'Call out inclusions, compaction, moisture, stones, clay, silt, sand, or organics.',
+  },
+  {
+    id: 'relationships',
+    label: 'Stratigraphic relationships',
+    helper: 'Mention what it overlies, is cut by, fills, abuts, or is equivalent to.',
+  },
+  {
+    id: 'finds-samples',
+    label: 'Finds and samples',
+    helper: 'Name finds, small finds, samples, building material, or say none observed.',
+  },
+  {
+    id: 'interpretation',
+    label: 'Interpretation',
+    helper: 'Say what you think the context is and any uncertainty to revisit later.',
+  },
+];
 
 export default function App() {
   const recorder = useAudioRecorder(RECORDING_OPTIONS);
@@ -85,6 +123,10 @@ export default function App() {
   const [isRecorderOpen, setIsRecorderOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [syncRunState, setSyncRunState] = useState<SyncRunState | null>(null);
+  const [coveredRecordingPromptIds, setCoveredRecordingPromptIds] = useState<string[]>(
+    []
+  );
+  const [isMissingPromptReviewOpen, setIsMissingPromptReviewOpen] = useState(false);
   const pulseAnimation = useRef(new Animated.Value(0)).current;
 
   const activeNote = activeNoteId
@@ -127,6 +169,9 @@ export default function App() {
   const errorNotice: AppNotice | null = errorMessage
     ? { tone: 'error', text: errorMessage }
     : null;
+  const missingRecordingPrompts = RECORDING_PROMPTS.filter(
+    (prompt) => !coveredRecordingPromptIds.includes(prompt.id)
+  );
 
   useEffect(() => {
     let isMounted = true;
@@ -304,6 +349,12 @@ export default function App() {
     };
   }, [pulseAnimation, recorderState.isRecording]);
 
+  useEffect(() => {
+    if (missingRecordingPrompts.length === 0) {
+      setIsMissingPromptReviewOpen(false);
+    }
+  }, [missingRecordingPrompts.length]);
+
   async function refreshNotes() {
     const notes = await listVoiceNotes();
     setSavedNotes(notes);
@@ -312,6 +363,8 @@ export default function App() {
   async function handleStartRecording() {
     setErrorMessage(null);
     setSyncNotice(null);
+    setCoveredRecordingPromptIds([]);
+    setIsMissingPromptReviewOpen(false);
 
     try {
       let granted = hasRecordingPermission;
@@ -341,8 +394,13 @@ export default function App() {
     }
   }
 
-  async function handleStopRecording() {
+  async function handleStopRecording({ allowMissingPrompts = false } = {}) {
     if (!recorderState.isRecording) {
+      return;
+    }
+
+    if (!allowMissingPrompts && missingRecordingPrompts.length > 0) {
+      setIsMissingPromptReviewOpen(true);
       return;
     }
 
@@ -372,6 +430,8 @@ export default function App() {
       await refreshNotes();
       setCurrentTab('notes');
       setIsRecorderOpen(false);
+      setCoveredRecordingPromptIds([]);
+      setIsMissingPromptReviewOpen(false);
     } catch (error) {
       setErrorMessage(
         getErrorMessage(error, 'Could not save the recording locally.')
@@ -379,6 +439,16 @@ export default function App() {
     } finally {
       setIsSaving(false);
     }
+  }
+
+  function handleToggleRecordingPrompt(promptId: string) {
+    setCoveredRecordingPromptIds((currentPromptIds) => {
+      if (currentPromptIds.includes(promptId)) {
+        return currentPromptIds.filter((currentPromptId) => currentPromptId !== promptId);
+      }
+
+      return [...currentPromptIds, promptId];
+    });
   }
 
   async function handleTogglePlayback(note: VoiceNote) {
@@ -795,6 +865,8 @@ export default function App() {
             disabled={isSaving}
             onPress={() => {
               setErrorMessage(null);
+              setCoveredRecordingPromptIds([]);
+              setIsMissingPromptReviewOpen(false);
               setIsRecorderOpen(true);
             }}
             style={({ pressed }) => [
@@ -836,11 +908,18 @@ export default function App() {
           errorNotice={errorNotice}
           hasRecordingPermission={hasRecordingPermission}
           isLoading={isLoading}
+          isMissingPromptReviewOpen={isMissingPromptReviewOpen}
           isOpen={isRecorderOpen}
           isRecording={recorderState.isRecording}
           isSaving={isSaving}
+          missingPrompts={missingRecordingPrompts}
           onClose={() => {
+            setCoveredRecordingPromptIds([]);
+            setIsMissingPromptReviewOpen(false);
             setIsRecorderOpen(false);
+          }}
+          onDismissMissingPromptReview={() => {
+            setIsMissingPromptReviewOpen(false);
           }}
           onStartRecording={() => {
             void handleStartRecording();
@@ -848,9 +927,15 @@ export default function App() {
           onStopRecording={() => {
             void handleStopRecording();
           }}
+          onStopRecordingWithMissingPrompts={() => {
+            void handleStopRecording({ allowMissingPrompts: true });
+          }}
+          onTogglePrompt={handleToggleRecordingPrompt}
           pulseOpacity={pulseOpacity}
           pulseScale={pulseScale}
+          prompts={RECORDING_PROMPTS}
           timerLabel={formatDuration(recorderState.durationMillis)}
+          coveredPromptIds={coveredRecordingPromptIds}
         />
 
         <SettingsSheet
