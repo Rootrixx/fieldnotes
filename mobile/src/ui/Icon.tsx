@@ -22,6 +22,7 @@ type IconName =
   | 'refresh-cw'
   | 'x'
   | 'share-2'
+  | 'camera'
   | 'chevron-right';
 
 export function Icon({

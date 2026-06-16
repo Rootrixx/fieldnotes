@@ -1,12 +1,14 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
   View,
 } from 'react-native';
+import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 
@@ -64,6 +66,8 @@ export function DocumentsScreen({
   const [contextSheets, setContextSheets] = useState<ContextSheet[]>([]);
   const [isLoadingSheets, setIsLoadingSheets] = useState(accountConnected);
   const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const [isImportOptionsOpen, setIsImportOptionsOpen] = useState(false);
+  const [isCameraOpen, setIsCameraOpen] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
   const [isImportingTemplate, setIsImportingTemplate] = useState(false);
   const [selectedNoteIds, setSelectedNoteIds] = useState<string[]>([]);
@@ -73,6 +77,8 @@ export function DocumentsScreen({
   const readyNotes = useMemo(() => getReadyNotes(notes), [notes]);
   const selectedTemplate =
     templates.find((template) => template.id === selectedTemplateId) ?? templates[0] ?? null;
+  const cameraRef = useRef<CameraView | null>(null);
+  const [cameraPermission, requestCameraPermission] = useCameraPermissions();
 
   async function refreshContextSheets() {
     const loadedSheets = await listContextSheets();
@@ -161,12 +167,36 @@ export function DocumentsScreen({
     );
   }
 
-  async function handleImportContextSheetTemplate() {
+  async function finishTemplateImport({
+    base64,
+    fileName,
+    mimeType,
+  }: {
+    base64: string;
+    fileName: string;
+    mimeType: string;
+  }) {
+    const template = await importContextSheetTemplate({
+      base64,
+      fileName,
+      mimeType,
+    });
+
+    await refreshTemplates();
+    setSelectedTemplateId(template.id);
+    setNotice({
+      tone: 'success',
+      text: `Imported ${template.name}. Select processed notes to generate with it.`,
+    });
+  }
+
+  async function handleImportContextSheetFile() {
     if (isImportingTemplate) {
       return;
     }
 
     setNotice(null);
+    setIsImportOptionsOpen(false);
     setIsImportingTemplate(true);
 
     try {
@@ -189,17 +219,10 @@ export function DocumentsScreen({
       const base64 = await FileSystem.readAsStringAsync(asset.uri, {
         encoding: FileSystem.EncodingType.Base64,
       });
-      const template = await importContextSheetTemplate({
+      await finishTemplateImport({
         base64,
         fileName: asset.name || 'context-sheet-image',
         mimeType: asset.mimeType || 'image/jpeg',
-      });
-
-      await refreshTemplates();
-      setSelectedTemplateId(template.id);
-      setNotice({
-        tone: 'success',
-        text: `Imported ${template.name}. Select processed notes to generate with it.`,
       });
     } catch (error) {
       setNotice({
@@ -208,6 +231,74 @@ export function DocumentsScreen({
           error instanceof Error
             ? error.message
             : 'Could not import this context sheet template.',
+      });
+    } finally {
+      setIsImportingTemplate(false);
+    }
+  }
+
+  async function handleOpenContextSheetCamera() {
+    setNotice(null);
+
+    try {
+      let permission = cameraPermission;
+
+      if (!permission?.granted) {
+        permission = await requestCameraPermission();
+      }
+
+      if (!permission.granted) {
+        setNotice({
+          tone: 'error',
+          text: 'Camera permission is required before photographing a context sheet.',
+        });
+        return;
+      }
+
+      setIsImportOptionsOpen(false);
+      setIsCameraOpen(true);
+    } catch (error) {
+      setNotice({
+        tone: 'error',
+        text:
+          error instanceof Error
+            ? error.message
+            : 'Could not open the camera on this device.',
+      });
+    }
+  }
+
+  async function handleCaptureContextSheetTemplate() {
+    if (isImportingTemplate) {
+      return;
+    }
+
+    setNotice(null);
+    setIsImportingTemplate(true);
+
+    try {
+      const photo = await cameraRef.current?.takePictureAsync({
+        base64: true,
+        quality: 0.82,
+      });
+
+      if (!photo?.base64) {
+        throw new Error('The camera did not return a readable photo.');
+      }
+
+      await finishTemplateImport({
+        base64: photo.base64,
+        fileName: `context-sheet-${Date.now()}.jpg`,
+        mimeType: 'image/jpeg',
+      });
+      setIsCameraOpen(false);
+    } catch (error) {
+      setNotice({
+        tone: 'error',
+        text:
+          error instanceof Error
+            ? error.message
+            : 'Could not import a template from this photo.',
       });
     } finally {
       setIsImportingTemplate(false);
@@ -256,11 +347,12 @@ export function DocumentsScreen({
   }
 
   return (
-    <ScrollView
-      style={styles.scroll}
-      contentContainerStyle={styles.content}
-      showsVerticalScrollIndicator={false}
-    >
+    <>
+      <ScrollView
+        style={styles.scroll}
+        contentContainerStyle={styles.content}
+        showsVerticalScrollIndicator={false}
+      >
       <View style={styles.sectionHeader}>
         <View>
           <Text style={styles.sectionTitle}>Context sheets</Text>
@@ -276,7 +368,8 @@ export function DocumentsScreen({
             accessibilityRole="button"
             disabled={!isSupabaseConfigured || !accountConnected || isImportingTemplate}
             onPress={() => {
-              void handleImportContextSheetTemplate();
+              setNotice(null);
+              setIsImportOptionsOpen(true);
             }}
             style={({ pressed }) => [
               styles.importButton,
@@ -539,7 +632,125 @@ export function DocumentsScreen({
           </View>
         ))
       )}
-    </ScrollView>
+      </ScrollView>
+
+      <Modal
+        animationType="fade"
+        onRequestClose={() => {
+          setIsImportOptionsOpen(false);
+        }}
+        transparent
+        visible={isImportOptionsOpen}
+      >
+        <View style={styles.importModalBackdrop}>
+          <View style={styles.importModalCard}>
+            <View style={styles.importModalHeader}>
+              <View>
+                <Text style={styles.importModalTitle}>Import context sheet</Text>
+                <Text style={styles.importModalBody}>
+                  Photograph a paper sheet or choose an existing image.
+                </Text>
+              </View>
+
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => {
+                  setIsImportOptionsOpen(false);
+                }}
+                style={({ pressed }) => [styles.modalCloseButton, pressed && styles.actionPressed]}
+              >
+                <Icon color="#2f241f" name="x" size={18} />
+              </Pressable>
+            </View>
+
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => {
+                void handleOpenContextSheetCamera();
+              }}
+              style={({ pressed }) => [styles.importChoice, pressed && styles.actionPressed]}
+            >
+              <Icon color="#ab4d38" name="camera" size={18} />
+              <View style={styles.importChoiceCopy}>
+                <Text style={styles.importChoiceTitle}>Take photo</Text>
+                <Text style={styles.importChoiceMeta}>Use the iPhone camera for OCR.</Text>
+              </View>
+            </Pressable>
+
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => {
+                void handleImportContextSheetFile();
+              }}
+              style={({ pressed }) => [styles.importChoice, pressed && styles.actionPressed]}
+            >
+              <Icon color="#ab4d38" name="file-text" size={18} />
+              <View style={styles.importChoiceCopy}>
+                <Text style={styles.importChoiceTitle}>Choose image</Text>
+                <Text style={styles.importChoiceMeta}>Pick a saved photo or screenshot.</Text>
+              </View>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        animationType="slide"
+        onRequestClose={() => {
+          if (!isImportingTemplate) {
+            setIsCameraOpen(false);
+          }
+        }}
+        visible={isCameraOpen}
+      >
+        <View style={styles.cameraScreen}>
+          <CameraView ref={cameraRef} facing="back" style={styles.cameraPreview} />
+
+          <View style={styles.cameraTopBar}>
+            <Pressable
+              accessibilityRole="button"
+              disabled={isImportingTemplate}
+              onPress={() => {
+                setIsCameraOpen(false);
+              }}
+              style={({ pressed }) => [
+                styles.cameraIconButton,
+                (pressed || isImportingTemplate) && styles.actionPressed,
+              ]}
+            >
+              <Icon color="#fff7ef" name="x" size={20} />
+            </Pressable>
+          </View>
+
+          <View style={styles.cameraGuide}>
+            <Text style={styles.cameraGuideTitle}>Fill the frame with the context sheet</Text>
+            <Text style={styles.cameraGuideBody}>
+              Keep the page flat, bright, and readable before capturing.
+            </Text>
+          </View>
+
+          <View style={styles.cameraBottomBar}>
+            <Pressable
+              accessibilityRole="button"
+              disabled={isImportingTemplate}
+              onPress={() => {
+                void handleCaptureContextSheetTemplate();
+              }}
+              style={({ pressed }) => [
+                styles.captureButton,
+                (pressed || isImportingTemplate) && styles.actionPressed,
+              ]}
+            >
+              {isImportingTemplate ? (
+                <ActivityIndicator color="#201713" size="small" />
+              ) : (
+                <View style={styles.captureButtonInner} />
+              )}
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
+    </>
   );
 }
 
@@ -843,6 +1054,149 @@ const styles = StyleSheet.create({
     color: '#362926',
     fontSize: 14,
     lineHeight: 20,
+  },
+  importModalBackdrop: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(31, 22, 20, 0.38)',
+    flex: 1,
+    justifyContent: 'center',
+    padding: 20,
+  },
+  importModalCard: {
+    backgroundColor: '#fff7ef',
+    borderColor: 'rgba(170, 143, 126, 0.24)',
+    borderRadius: 20,
+    borderWidth: 1,
+    gap: 12,
+    maxWidth: 430,
+    padding: 16,
+    width: '100%',
+  },
+  importModalHeader: {
+    alignItems: 'flex-start',
+    flexDirection: 'row',
+    gap: 12,
+    justifyContent: 'space-between',
+  },
+  importModalTitle: {
+    color: '#201713',
+    fontSize: 18,
+    fontWeight: '800',
+  },
+  importModalBody: {
+    color: '#715d50',
+    fontSize: 14,
+    lineHeight: 20,
+    marginTop: 4,
+    maxWidth: 300,
+  },
+  modalCloseButton: {
+    alignItems: 'center',
+    backgroundColor: '#efe3d6',
+    borderRadius: 16,
+    height: 34,
+    justifyContent: 'center',
+    width: 34,
+  },
+  importChoice: {
+    alignItems: 'center',
+    backgroundColor: '#fffdfa',
+    borderColor: 'rgba(171, 77, 56, 0.16)',
+    borderRadius: 16,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 12,
+    padding: 14,
+  },
+  importChoiceCopy: {
+    flex: 1,
+    gap: 3,
+  },
+  importChoiceTitle: {
+    color: '#201713',
+    fontSize: 15,
+    fontWeight: '800',
+  },
+  importChoiceMeta: {
+    color: '#715d50',
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  cameraScreen: {
+    backgroundColor: '#111',
+    flex: 1,
+  },
+  cameraPreview: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  cameraTopBar: {
+    left: 18,
+    position: 'absolute',
+    right: 18,
+    top: 56,
+  },
+  cameraIconButton: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.46)',
+    borderColor: 'rgba(255, 255, 255, 0.18)',
+    borderRadius: 18,
+    borderWidth: 1,
+    height: 40,
+    justifyContent: 'center',
+    width: 40,
+  },
+  cameraGuide: {
+    alignSelf: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.52)',
+    borderColor: 'rgba(255, 255, 255, 0.18)',
+    borderRadius: 8,
+    borderWidth: 1,
+    bottom: 132,
+    gap: 4,
+    maxWidth: 340,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    position: 'absolute',
+  },
+  cameraGuideTitle: {
+    color: '#fff7ef',
+    fontSize: 15,
+    fontWeight: '800',
+    textAlign: 'center',
+  },
+  cameraGuideBody: {
+    color: '#eadfd7',
+    fontSize: 13,
+    lineHeight: 18,
+    textAlign: 'center',
+  },
+  cameraBottomBar: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.34)',
+    bottom: 0,
+    left: 0,
+    paddingBottom: 34,
+    paddingTop: 18,
+    position: 'absolute',
+    right: 0,
+  },
+  captureButton: {
+    alignItems: 'center',
+    backgroundColor: '#fff7ef',
+    borderColor: 'rgba(255, 255, 255, 0.7)',
+    borderRadius: 38,
+    borderWidth: 4,
+    height: 76,
+    justifyContent: 'center',
+    width: 76,
+  },
+  captureButtonInner: {
+    backgroundColor: '#fff7ef',
+    borderColor: '#201713',
+    borderRadius: 28,
+    borderWidth: 1,
+    height: 56,
+    width: 56,
   },
   actionPressed: {
     opacity: 0.82,
