@@ -53,6 +53,19 @@ type RecordingPrompt = {
   label: string;
   helper: string;
 };
+type LiveSpeechStatus = 'idle' | 'listening' | 'unavailable' | 'error';
+type SpeechRecognizer = {
+  start: (locale: string, options?: Record<string, unknown>) => Promise<unknown>;
+  stop: () => Promise<unknown>;
+  cancel: () => Promise<unknown>;
+  destroy: () => Promise<unknown>;
+  removeAllListeners: () => void;
+  isAvailable: () => Promise<boolean>;
+  onSpeechEnd?: () => void;
+  onSpeechError?: (event: { error?: unknown }) => void;
+  onSpeechPartialResults?: (event: { value?: string[] }) => void;
+  onSpeechResults?: (event: { value?: string[] }) => void;
+};
 
 const RECORDING_OPTIONS = {
   ...RecordingPresets.HIGH_QUALITY,
@@ -94,6 +107,86 @@ const RECORDING_PROMPTS: RecordingPrompt[] = [
   },
 ];
 
+const RECORDING_PROMPT_MATCHERS: Record<string, RegExp[]> = {
+  context: [
+    /\bcontext\b/i,
+    /\btrench\b/i,
+    /\bplan\b/i,
+    /\bsection\b/i,
+    /\blevel\b/i,
+    /\bcoordinate/i,
+  ],
+  'soil-color': [
+    /\bsoil colou?r\b/i,
+    /\bcolou?r\b/i,
+    /\bbrown\b/i,
+    /\byellow\b/i,
+    /\bred\b/i,
+    /\bblack\b/i,
+    /\bgr[ae]y\b/i,
+    /\bmottl/i,
+  ],
+  'soil-composition': [
+    /\bcomposition\b/i,
+    /\btexture\b/i,
+    /\bclay\b/i,
+    /\bsilt\b/i,
+    /\bsand\b/i,
+    /\bgravel\b/i,
+    /\bstone\b/i,
+    /\bcompact/i,
+    /\bloose\b/i,
+    /\bmoist\b/i,
+    /\borganic/i,
+  ],
+  relationships: [
+    /\brelationship/i,
+    /\boverlies\b/i,
+    /\boverlain\b/i,
+    /\babut/i,
+    /\bcut by\b/i,
+    /\bcuts\b/i,
+    /\bfilled by\b/i,
+    /\bfill of\b/i,
+    /\bsame as\b/i,
+    /\bpart of\b/i,
+  ],
+  'finds-samples': [
+    /\bfinds?\b/i,
+    /\bsamples?\b/i,
+    /\bsmall finds?\b/i,
+    /\bpot\b/i,
+    /\bbone\b/i,
+    /\bflint\b/i,
+    /\bglass\b/i,
+    /\bmetal\b/i,
+    /\bcbm\b/i,
+    /\bwood\b/i,
+    /\bleather\b/i,
+    /\bno finds?\b/i,
+  ],
+  interpretation: [
+    /\binterpret/i,
+    /\bprobably\b/i,
+    /\bpossibly\b/i,
+    /\buncertain\b/i,
+    /\bdeposit\b/i,
+    /\bfeature\b/i,
+    /\bstructure\b/i,
+    /\bmasonry\b/i,
+  ],
+};
+
+const VoiceRecognizer = (() => {
+  try {
+    const voiceModule = require('@react-native-voice/voice');
+
+    return (voiceModule.default ?? voiceModule) as SpeechRecognizer;
+  } catch {
+    return null;
+  }
+})();
+
 export default function App() {
   const recorder = useAudioRecorder(RECORDING_OPTIONS);
   const recorderState = useAudioRecorderState(recorder);
@@ -127,7 +220,13 @@ export default function App() {
     []
   );
   const [isMissingPromptReviewOpen, setIsMissingPromptReviewOpen] = useState(false);
+  const [liveTranscript, setLiveTranscript] = useState('');
+  const [liveSpeechStatus, setLiveSpeechStatus] = useState<LiveSpeechStatus>(
+    VoiceRecognizer ? 'idle' : 'unavailable'
+  );
   const pulseAnimation = useRef(new Animated.Value(0)).current;
+  const shouldListenForSpeechRef = useRef(false);
+  const isStartingSpeechRef = useRef(false);
 
   const activeNote = activeNoteId
     ? savedNotes.find((note) => note.id === activeNoteId) ?? null
@@ -355,9 +454,124 @@ export default function App() {
     }
   }, [missingRecordingPrompts.length]);
 
+  useEffect(() => {
+    return () => {
+      void stopLiveSpeechRecognition();
+    };
+  }, []);
+
   async function refreshNotes() {
     const notes = await listVoiceNotes();
     setSavedNotes(notes);
+  }
+
+  function checkPromptsFromTranscript(text: string) {
+    const normalizedText = text.trim();
+
+    if (!normalizedText) {
+      return;
+    }
+
+    const matchedPromptIds = RECORDING_PROMPTS
+      .filter((prompt) =>
+        RECORDING_PROMPT_MATCHERS[prompt.id]?.some((matcher) =>
+          matcher.test(normalizedText)
+        )
+      )
+      .map((prompt) => prompt.id);
+
+    if (matchedPromptIds.length === 0) {
+      return;
+    }
+
+    setCoveredRecordingPromptIds((currentPromptIds) => {
+      const nextPromptIds = new Set(currentPromptIds);
+      matchedPromptIds.forEach((promptId) => {
+        nextPromptIds.add(promptId);
+      });
+
+      return Array.from(nextPromptIds);
+    });
+  }
+
+  async function startLiveSpeechRecognition() {
+    if (!VoiceRecognizer) {
+      setLiveSpeechStatus('unavailable');
+      return;
+    }
+
+    if (isStartingSpeechRef.current) {
+      return;
+    }
+
+    isStartingSpeechRef.current = true;
+    shouldListenForSpeechRef.current = true;
+
+    try {
+      const isAvailable = await VoiceRecognizer.isAvailable();
+
+      if (!isAvailable) {
+        setLiveSpeechStatus('unavailable');
+        return;
+      }
+
+      VoiceRecognizer.onSpeechPartialResults = (event) => {
+        const text = event.value?.join(' ') ?? '';
+        setLiveTranscript(text);
+        checkPromptsFromTranscript(text);
+      };
+      VoiceRecognizer.onSpeechResults = (event) => {
+        const text = event.value?.join(' ') ?? '';
+        setLiveTranscript(text);
+        checkPromptsFromTranscript(text);
+      };
+      VoiceRecognizer.onSpeechError = () => {
+        if (shouldListenForSpeechRef.current) {
+          setLiveSpeechStatus('error');
+        }
+      };
+      VoiceRecognizer.onSpeechEnd = () => {
+        if (!shouldListenForSpeechRef.current) {
+          return;
+        }
+
+        setLiveSpeechStatus('idle');
+        setTimeout(() => {
+          if (shouldListenForSpeechRef.current) {
+            void startLiveSpeechRecognition();
+          }
+        }, 650);
+      };
+
+      await VoiceRecognizer.start('en-US');
+      setLiveSpeechStatus('listening');
+    } catch {
+      setLiveSpeechStatus('error');
+    } finally {
+      isStartingSpeechRef.current = false;
+    }
+  }
+
+  async function stopLiveSpeechRecognition() {
+    shouldListenForSpeechRef.current = false;
+
+    if (!VoiceRecognizer) {
+      return;
+    }
+
+    try {
+      await VoiceRecognizer.stop();
+      await VoiceRecognizer.destroy();
+    } catch {
+      try {
+        await VoiceRecognizer.cancel();
+      } catch {
+        // Ignore shutdown errors from a recognizer that was never started.
+      }
+    } finally {
+      VoiceRecognizer.removeAllListeners();
+      setLiveSpeechStatus(VoiceRecognizer ? 'idle' : 'unavailable');
+    }
   }
 
   async function handleStartRecording() {
@@ -365,6 +579,8 @@ export default function App() {
     setSyncNotice(null);
     setCoveredRecordingPromptIds([]);
     setIsMissingPromptReviewOpen(false);
+    setLiveTranscript('');
+    setLiveSpeechStatus(VoiceRecognizer ? 'idle' : 'unavailable');
 
     try {
       let granted = hasRecordingPermission;
@@ -387,6 +603,7 @@ export default function App() {
 
       await recorder.prepareToRecordAsync();
       recorder.record();
+      void startLiveSpeechRecognition();
     } catch (error) {
       setErrorMessage(
         getErrorMessage(error, 'Could not start recording on this device.')
@@ -409,6 +626,7 @@ export default function App() {
     setIsSaving(true);
 
     try {
+      await stopLiveSpeechRecognition();
       await recorder.stop();
 
       await setAudioModeAsync({
@@ -432,6 +650,7 @@ export default function App() {
       setIsRecorderOpen(false);
       setCoveredRecordingPromptIds([]);
       setIsMissingPromptReviewOpen(false);
+      setLiveTranscript('');
     } catch (error) {
       setErrorMessage(
         getErrorMessage(error, 'Could not save the recording locally.')
@@ -912,6 +1131,8 @@ export default function App() {
           isOpen={isRecorderOpen}
           isRecording={recorderState.isRecording}
           isSaving={isSaving}
+          liveSpeechStatus={liveSpeechStatus}
+          liveTranscript={liveTranscript}
           missingPrompts={missingRecordingPrompts}
           onClose={() => {
             setCoveredRecordingPromptIds([]);

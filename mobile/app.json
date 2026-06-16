@@ -15,7 +15,8 @@
     },
     "ios": {
       "infoPlist": {
-        "NSCameraUsageDescription": "Allow FieldNotes to photograph context sheets for OCR import."
+        "NSCameraUsageDescription": "Allow FieldNotes to photograph context sheets for OCR import.",
+        "NSSpeechRecognitionUsageDescription": "Allow FieldNotes to check recording prompts as you speak."
       },
       "supportsTablet": true,
       "bundleIdentifier": "com.barysiuk.fieldnotes-mobile"
@@ -40,6 +41,13 @@
     "plugins": [
       "expo-sqlite",
       "expo-audio",
+      [
+        "@react-native-voice/voice",
+        {
+          "microphonePermission": "Allow FieldNotes to record voice notes.",
+          "speechRecognitionPermission": "Allow FieldNotes to check recording prompts as you speak."
+        }
+      ],
       [
         "expo-camera",
         {

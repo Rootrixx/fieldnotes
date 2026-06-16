@@ -20,6 +20,7 @@ type RecordingPrompt = {
   label: string;
   helper: string;
 };
+type LiveSpeechStatus = 'idle' | 'listening' | 'unavailable' | 'error';
 
 export function RecorderSheet({
   coveredPromptIds,
@@ -30,6 +31,8 @@ export function RecorderSheet({
   isOpen,
   isRecording,
   isSaving,
+  liveSpeechStatus,
+  liveTranscript,
   missingPrompts,
   onClose,
   onDismissMissingPromptReview,
@@ -50,6 +53,8 @@ export function RecorderSheet({
   isOpen: boolean;
   isRecording: boolean;
   isSaving: boolean;
+  liveSpeechStatus: LiveSpeechStatus;
+  liveTranscript: string;
   missingPrompts: RecordingPrompt[];
   onClose: () => void;
   onDismissMissingPromptReview: () => void;
@@ -65,6 +70,14 @@ export function RecorderSheet({
   const coveredPromptCount = coveredPromptIds.length;
   const promptProgressLabel = `${coveredPromptCount}/${prompts.length} prompts covered`;
   const canStopRecording = !isRecording || missingPrompts.length === 0;
+  const liveSpeechLabel =
+    liveSpeechStatus === 'listening'
+      ? 'Live speech listening'
+      : liveSpeechStatus === 'unavailable'
+        ? 'Live speech unavailable in this build'
+        : liveSpeechStatus === 'error'
+          ? 'Live speech paused'
+          : 'Live speech ready';
 
   return (
     <Modal
@@ -104,7 +117,7 @@ export function RecorderSheet({
           >
             <Text style={styles.body}>
               {isRecording
-                ? 'Tap each prompt after you say it, or stop and review what is still missing.'
+                ? 'Prompts can check off as you speak. You can still tap them manually.'
                 : "Click record when you're ready."}
             </Text>
             <Text style={styles.timer}>{timerLabel}</Text>
@@ -148,9 +161,32 @@ export function RecorderSheet({
               <Text style={styles.promptProgress}>{promptProgressLabel}</Text>
             </View>
             <Text style={styles.promptNote}>
-              Prompts are checked manually for now. Live speech checkoff will need
-              on-device transcription.
+              {liveSpeechStatus === 'unavailable'
+                ? 'Live speech needs the custom iPhone build. Expo Go can still use manual prompt checkoff.'
+                : 'Live speech listens for prompt keywords and checks off matching items.'}
             </Text>
+
+            {isRecording ? (
+              <View
+                style={[
+                  styles.liveSpeechPanel,
+                  liveSpeechStatus === 'listening' && styles.liveSpeechPanelActive,
+                ]}
+              >
+                <View style={styles.liveSpeechHeader}>
+                  <View
+                    style={[
+                      styles.liveSpeechDot,
+                      liveSpeechStatus === 'listening' && styles.liveSpeechDotActive,
+                    ]}
+                  />
+                  <Text style={styles.liveSpeechLabel}>{liveSpeechLabel}</Text>
+                </View>
+                <Text numberOfLines={3} style={styles.liveTranscript}>
+                  {liveTranscript || 'Say context details and prompt keywords out loud.'}
+                </Text>
+              </View>
+            ) : null}
 
             <View style={styles.promptList}>
               {prompts.map((prompt) => {
@@ -370,6 +406,43 @@ const styles = StyleSheet.create({
     lineHeight: 18,
     maxWidth: 420,
     width: '100%',
+  },
+  liveSpeechPanel: {
+    backgroundColor: '#fff7ef',
+    borderColor: 'rgba(154, 126, 110, 0.2)',
+    borderRadius: 8,
+    borderWidth: 1,
+    gap: 8,
+    maxWidth: 420,
+    padding: 12,
+    width: '100%',
+  },
+  liveSpeechPanelActive: {
+    borderColor: 'rgba(63, 126, 87, 0.35)',
+  },
+  liveSpeechHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 8,
+  },
+  liveSpeechDot: {
+    backgroundColor: '#bda99c',
+    borderRadius: 5,
+    height: 10,
+    width: 10,
+  },
+  liveSpeechDotActive: {
+    backgroundColor: '#3f7e57',
+  },
+  liveSpeechLabel: {
+    color: '#2d211d',
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  liveTranscript: {
+    color: '#6b594f',
+    fontSize: 13,
+    lineHeight: 18,
   },
   promptList: {
     gap: 10,

@@ -49,6 +49,8 @@
     <string>Allow FieldNotes to photograph context sheets for OCR import.</string>
     <key>NSMicrophoneUsageDescription</key>
     <string>Allow $(PRODUCT_NAME) to access your microphone</string>
+    <key>NSSpeechRecognitionUsageDescription</key>
+    <string>Allow FieldNotes to check recording prompts as you speak.</string>
     <key>RCTNewArchEnabled</key>
     <true/>
     <key>UILaunchStoryboardName</key>
