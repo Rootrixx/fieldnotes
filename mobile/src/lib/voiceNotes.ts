@@ -250,10 +250,12 @@ export async function persistVoiceNote({
   sourceUri,
   durationMillis,
   preferredExtension,
+  transcriptText,
 }: {
   sourceUri: string;
   durationMillis: number;
   preferredExtension?: string;
+  transcriptText?: string | null;
 }) {
   const database = await getDatabase();
   const audioDirectory = ensureAudioDirectory();
@@ -277,7 +279,7 @@ export async function persistVoiceNote({
     syncStatus: 'pending_upload',
     processingStatus: 'not_started',
     storagePath: null,
-    transcriptText: null,
+    transcriptText: transcriptText?.trim() || null,
     remoteNoteId: null,
     lastError: null,
     retryCount: 0,

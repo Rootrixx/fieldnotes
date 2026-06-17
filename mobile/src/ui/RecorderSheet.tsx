@@ -29,6 +29,7 @@ export function RecorderSheet({
   isLoading,
   isMissingPromptReviewOpen,
   isOpen,
+  isPaused,
   isRecording,
   isSaving,
   liveSpeechStatus,
@@ -39,10 +40,12 @@ export function RecorderSheet({
   onStartRecording,
   onStopRecording,
   onStopRecordingWithMissingPrompts,
+  onTogglePause,
   onTogglePrompt,
   pulseOpacity,
   pulseScale,
   prompts,
+  recordingContextLabel,
   timerLabel,
 }: {
   coveredPromptIds: string[];
@@ -51,6 +54,7 @@ export function RecorderSheet({
   isLoading: boolean;
   isMissingPromptReviewOpen: boolean;
   isOpen: boolean;
+  isPaused: boolean;
   isRecording: boolean;
   isSaving: boolean;
   liveSpeechStatus: LiveSpeechStatus;
@@ -61,10 +65,12 @@ export function RecorderSheet({
   onStartRecording: () => void;
   onStopRecording: () => void;
   onStopRecordingWithMissingPrompts: () => void;
+  onTogglePause: () => void;
   onTogglePrompt: (promptId: string) => void;
   pulseOpacity: Animated.AnimatedInterpolation<number>;
   pulseScale: Animated.AnimatedInterpolation<number>;
   prompts: RecordingPrompt[];
+  recordingContextLabel: string | null;
   timerLabel: string;
 }) {
   const coveredPromptCount = coveredPromptIds.length;
@@ -116,17 +122,22 @@ export function RecorderSheet({
             showsVerticalScrollIndicator={false}
           >
             <Text style={styles.body}>
-              {isRecording
+              {isPaused
+                ? 'Recording paused. Resume when you are ready to add more.'
+                : isRecording
                 ? 'Prompts can check off as you speak. You can still tap them manually.'
                 : "Click record when you're ready."}
             </Text>
+            {recordingContextLabel ? (
+              <Text style={styles.contextLabel}>{recordingContextLabel}</Text>
+            ) : null}
             <Text style={styles.timer}>{timerLabel}</Text>
 
             <View style={styles.actionWrap}>
               <Animated.View
                 style={[
                   styles.pulse,
-                  !isRecording ? styles.pulseHidden : null,
+                  (!isRecording || isPaused) ? styles.pulseHidden : null,
                   {
                     opacity: pulseOpacity,
                     transform: [{ scale: pulseScale }],
@@ -156,6 +167,23 @@ export function RecorderSheet({
               </Pressable>
             </View>
 
+            {isRecording ? (
+              <Pressable
+                accessibilityRole="button"
+                disabled={isSaving}
+                onPress={onTogglePause}
+                style={({ pressed }) => [
+                  styles.pauseButton,
+                  (pressed || isSaving) && styles.actionPressed,
+                ]}
+              >
+                <Icon color="#8a3b2d" name={isPaused ? 'play' : 'pause'} size={16} />
+                <Text style={styles.pauseButtonText}>
+                  {isPaused ? 'Resume recording' : 'Pause recording'}
+                </Text>
+              </Pressable>
+            ) : null}
+
             <View style={styles.promptHeader}>
               <Text style={styles.promptTitle}>Recording prompts</Text>
               <Text style={styles.promptProgress}>{promptProgressLabel}</Text>
@@ -183,7 +211,9 @@ export function RecorderSheet({
                   <Text style={styles.liveSpeechLabel}>{liveSpeechLabel}</Text>
                 </View>
                 <Text numberOfLines={3} style={styles.liveTranscript}>
-                  {liveTranscript || 'Say context details and prompt keywords out loud.'}
+                  {isPaused
+                    ? 'Paused. Resume recording to continue live speech checkoff.'
+                    : liveTranscript || 'Say context details and prompt keywords out loud.'}
                 </Text>
               </View>
             ) : null}
@@ -338,6 +368,13 @@ const styles = StyleSheet.create({
     maxWidth: 280,
     textAlign: 'center',
   },
+  contextLabel: {
+    color: '#8a3b2d',
+    fontSize: 13,
+    fontWeight: '800',
+    maxWidth: 320,
+    textAlign: 'center',
+  },
   timer: {
     color: '#1d1512',
     fontSize: 58,
@@ -372,6 +409,22 @@ const styles = StyleSheet.create({
   },
   actionStop: {
     backgroundColor: '#6b2c22',
+  },
+  pauseButton: {
+    alignItems: 'center',
+    backgroundColor: '#fff7ef',
+    borderColor: 'rgba(138, 59, 45, 0.22)',
+    borderRadius: 16,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 8,
+    minHeight: 42,
+    paddingHorizontal: 14,
+  },
+  pauseButtonText: {
+    color: '#8a3b2d',
+    fontSize: 13,
+    fontWeight: '800',
   },
   hint: {
     color: '#6f5c51',

@@ -17,6 +17,7 @@ import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { syncVoiceNotesManually } from './src/lib/noteSync';
 import {
   formatDuration,
+  formatDate,
   formatHeaderDate,
   getPlaybackProgress,
   getSyncProgressLabel,
@@ -35,6 +36,7 @@ import {
   initializeVoiceNotesStore,
   listVoiceNotes,
   persistVoiceNote,
+  updateVoiceNote,
 } from './src/lib/voiceNotes';
 import { DocumentsScreen } from './src/screens/DocumentsScreen';
 import { NotesScreen } from './src/screens/NotesScreen';
@@ -224,6 +226,8 @@ export default function App() {
   const [liveSpeechStatus, setLiveSpeechStatus] = useState<LiveSpeechStatus>(
     VoiceRecognizer ? 'idle' : 'unavailable'
   );
+  const [isRecorderPaused, setIsRecorderPaused] = useState(false);
+  const [continuationNote, setContinuationNote] = useState<VoiceNote | null>(null);
   const pulseAnimation = useRef(new Animated.Value(0)).current;
   const shouldListenForSpeechRef = useRef(false);
   const isStartingSpeechRef = useRef(false);
@@ -268,6 +272,7 @@ export default function App() {
   const errorNotice: AppNotice | null = errorMessage
     ? { tone: 'error', text: errorMessage }
     : null;
+  const isRecordingSessionActive = recorderState.isRecording || isRecorderPaused;
   const missingRecordingPrompts = RECORDING_PROMPTS.filter(
     (prompt) => !coveredRecordingPromptIds.includes(prompt.id)
   );
@@ -581,6 +586,7 @@ export default function App() {
     setIsMissingPromptReviewOpen(false);
     setLiveTranscript('');
     setLiveSpeechStatus(VoiceRecognizer ? 'idle' : 'unavailable');
+    setIsRecorderPaused(false);
 
     try {
       let granted = hasRecordingPermission;
@@ -612,7 +618,7 @@ export default function App() {
   }
 
   async function handleStopRecording({ allowMissingPrompts = false } = {}) {
-    if (!recorderState.isRecording) {
+    if (!isRecordingSessionActive) {
       return;
     }
 
@@ -628,6 +634,7 @@ export default function App() {
     try {
       await stopLiveSpeechRecognition();
       await recorder.stop();
+      setIsRecorderPaused(false);
 
       await setAudioModeAsync({
         allowsRecording: false,
@@ -644,6 +651,7 @@ export default function App() {
         sourceUri,
         durationMillis: recorderState.durationMillis,
         preferredExtension: RECORDING_OPTIONS.extension,
+        transcriptText: liveTranscript,
       });
       await refreshNotes();
       setCurrentTab('notes');
@@ -651,12 +659,38 @@ export default function App() {
       setCoveredRecordingPromptIds([]);
       setIsMissingPromptReviewOpen(false);
       setLiveTranscript('');
+      setContinuationNote(null);
     } catch (error) {
       setErrorMessage(
         getErrorMessage(error, 'Could not save the recording locally.')
       );
     } finally {
       setIsSaving(false);
+    }
+  }
+
+  async function handleToggleRecordingPause() {
+    if (!isRecordingSessionActive || isSaving) {
+      return;
+    }
+
+    setErrorMessage(null);
+
+    try {
+      if (isRecorderPaused) {
+        recorder.record();
+        setIsRecorderPaused(false);
+        void startLiveSpeechRecognition();
+        return;
+      }
+
+      recorder.pause();
+      setIsRecorderPaused(true);
+      await stopLiveSpeechRecognition();
+    } catch (error) {
+      setErrorMessage(
+        getErrorMessage(error, 'Could not pause or resume this recording.')
+      );
     }
   }
 
@@ -670,8 +704,44 @@ export default function App() {
     });
   }
 
+  async function handleSaveTranscript(note: VoiceNote, transcriptText: string) {
+    if (isRecordingSessionActive || isSaving || isSyncing) {
+      return;
+    }
+
+    setErrorMessage(null);
+
+    try {
+      await updateVoiceNote(note.id, {
+        transcriptText: transcriptText.trim() || null,
+        lastError: null,
+      });
+      await refreshNotes();
+    } catch (error) {
+      setErrorMessage(getErrorMessage(error, 'Could not save transcript edits.'));
+    }
+  }
+
+  function handleContinueRecording(note: VoiceNote) {
+    if (isRecordingSessionActive || isSaving || isSyncing) {
+      return;
+    }
+
+    player.pause();
+    setActiveNoteId(null);
+    setQueuedPlaybackId(null);
+    setSelectedNoteId(null);
+    setContinuationNote(note);
+    setCoveredRecordingPromptIds([]);
+    setIsMissingPromptReviewOpen(false);
+    setLiveTranscript('');
+    setIsRecorderPaused(false);
+    setErrorMessage(null);
+    setIsRecorderOpen(true);
+  }
+
   async function handleTogglePlayback(note: VoiceNote) {
-    if (recorderState.isRecording || isSaving || deletingNoteId === note.id) {
+    if (isRecordingSessionActive || isSaving || deletingNoteId === note.id) {
       return;
     }
 
@@ -705,7 +775,7 @@ export default function App() {
   }
 
   async function handleDeleteNote(note: VoiceNote) {
-    if (recorderState.isRecording || isSaving || isSyncing) {
+    if (isRecordingSessionActive || isSaving || isSyncing) {
       return;
     }
 
@@ -1034,7 +1104,7 @@ export default function App() {
               activeSyncNote={activeSyncNote}
               isAuthBusy={isAuthBusy}
               isBusy={isBusy}
-              isRecording={recorderState.isRecording}
+              isRecording={isRecordingSessionActive}
               isSyncing={isSyncing}
               noteCountLabel={noteCountLabel}
               notes={savedNotes}
@@ -1084,8 +1154,11 @@ export default function App() {
             disabled={isSaving}
             onPress={() => {
               setErrorMessage(null);
+              setContinuationNote(null);
               setCoveredRecordingPromptIds([]);
               setIsMissingPromptReviewOpen(false);
+              setLiveTranscript('');
+              setIsRecorderPaused(false);
               setIsRecorderOpen(true);
             }}
             style={({ pressed }) => [
@@ -1106,13 +1179,17 @@ export default function App() {
           isBusy={isBusy}
           isPlayerLoaded={playerStatus.isLoaded}
           isPlaying={Boolean(selectedNote && activeNoteId === selectedNote.id && playerStatus.playing)}
-          isRecording={recorderState.isRecording}
+          isRecording={isRecordingSessionActive}
           note={selectedNote}
           onClose={() => {
             setSelectedNoteId(null);
           }}
+          onContinueRecording={handleContinueRecording}
           onDelete={(note) => {
             void handleDeleteNote(note);
+          }}
+          onSaveTranscript={(note, transcriptText) => {
+            void handleSaveTranscript(note, transcriptText);
           }}
           onTogglePlayback={(note) => {
             void handleTogglePlayback(note);
@@ -1129,14 +1206,18 @@ export default function App() {
           isLoading={isLoading}
           isMissingPromptReviewOpen={isMissingPromptReviewOpen}
           isOpen={isRecorderOpen}
-          isRecording={recorderState.isRecording}
+          isPaused={isRecorderPaused}
+          isRecording={isRecordingSessionActive}
           isSaving={isSaving}
           liveSpeechStatus={liveSpeechStatus}
           liveTranscript={liveTranscript}
           missingPrompts={missingRecordingPrompts}
           onClose={() => {
+            setContinuationNote(null);
             setCoveredRecordingPromptIds([]);
             setIsMissingPromptReviewOpen(false);
+            setLiveTranscript('');
+            setIsRecorderPaused(false);
             setIsRecorderOpen(false);
           }}
           onDismissMissingPromptReview={() => {
@@ -1151,10 +1232,16 @@ export default function App() {
           onStopRecordingWithMissingPrompts={() => {
             void handleStopRecording({ allowMissingPrompts: true });
           }}
+          onTogglePause={() => {
+            void handleToggleRecordingPause();
+          }}
           onTogglePrompt={handleToggleRecordingPrompt}
           pulseOpacity={pulseOpacity}
           pulseScale={pulseScale}
           prompts={RECORDING_PROMPTS}
+          recordingContextLabel={
+            continuationNote ? `Adding more to ${formatDate(continuationNote.createdAt)}` : null
+          }
           timerLabel={formatDuration(recorderState.durationMillis)}
           coveredPromptIds={coveredRecordingPromptIds}
         />

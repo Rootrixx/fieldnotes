@@ -1,4 +1,14 @@
-import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useEffect, useState } from 'react';
+import {
+  ActivityIndicator,
+  Modal,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 
@@ -17,7 +27,9 @@ export function NoteDetailSheet({
   isPlayerLoaded,
   note,
   onClose,
+  onContinueRecording,
   onDelete,
+  onSaveTranscript,
   onTogglePlayback,
   playbackDuration,
   playbackProgress,
@@ -32,13 +44,23 @@ export function NoteDetailSheet({
   isRecording: boolean;
   note: VoiceNote | null;
   onClose: () => void;
+  onContinueRecording: (note: VoiceNote) => void;
   onDelete: (note: VoiceNote) => void;
+  onSaveTranscript: (note: VoiceNote, transcriptText: string) => void;
   onTogglePlayback: (note: VoiceNote) => void;
   playbackDuration: number;
   playbackProgress: number;
   playbackTime: number;
   queuedPlaybackId: string | null;
 }) {
+  const [isEditingTranscript, setIsEditingTranscript] = useState(false);
+  const [transcriptDraft, setTranscriptDraft] = useState('');
+
+  useEffect(() => {
+    setIsEditingTranscript(false);
+    setTranscriptDraft(note?.transcriptText ?? '');
+  }, [note?.id, note?.transcriptText]);
+
   return (
     <Modal animationType="slide" onRequestClose={onClose} visible={Boolean(note)}>
       <SafeAreaProvider>
@@ -105,6 +127,21 @@ export function NoteDetailSheet({
                     <Text style={styles.playLabel}>{isPlaying ? 'Pause' : 'Play'}</Text>
                   </Pressable>
 
+                  <Pressable
+                    accessibilityRole="button"
+                    disabled={isBusy || isRecording}
+                    onPress={() => {
+                      onContinueRecording(note);
+                    }}
+                    style={({ pressed }) => [
+                      styles.continueButton,
+                      (pressed || isBusy || isRecording) && styles.actionPressed,
+                    ]}
+                  >
+                    <Icon color="#9d4333" name="mic" size={16} />
+                    <Text style={styles.continueLabel}>Add more</Text>
+                  </Pressable>
+
                   {(isPlaying || queuedPlaybackId === note.id) ? (
                     <View style={styles.playback}>
                       <Text style={styles.playbackStatus}>
@@ -126,19 +163,64 @@ export function NoteDetailSheet({
                   ) : null}
                 </View>
 
-                {note.transcriptText ? (
-                  <View style={styles.card}>
+                <View style={styles.card}>
+                  <View style={styles.cardHeaderRow}>
                     <Text style={styles.cardLabel}>Transcript</Text>
+
+                    <Pressable
+                      accessibilityRole="button"
+                      disabled={isBusy || isRecording}
+                      onPress={() => {
+                        setTranscriptDraft(note.transcriptText ?? '');
+                        setIsEditingTranscript((currentValue) => !currentValue);
+                      }}
+                      style={({ pressed }) => [
+                        styles.editButton,
+                        (pressed || isBusy || isRecording) && styles.actionPressed,
+                      ]}
+                    >
+                      <Text style={styles.editButtonText}>
+                        {isEditingTranscript ? 'Cancel' : 'Edit'}
+                      </Text>
+                    </Pressable>
+                  </View>
+
+                  {isEditingTranscript ? (
+                    <>
+                      <TextInput
+                        multiline
+                        onChangeText={setTranscriptDraft}
+                        placeholder="Type or correct the transcript here."
+                        placeholderTextColor="#8d7668"
+                        style={styles.transcriptInput}
+                        textAlignVertical="top"
+                        value={transcriptDraft}
+                      />
+
+                      <Pressable
+                        accessibilityRole="button"
+                        disabled={isBusy || isRecording}
+                        onPress={() => {
+                          onSaveTranscript(note, transcriptDraft);
+                          setIsEditingTranscript(false);
+                        }}
+                        style={({ pressed }) => [
+                          styles.saveTranscriptButton,
+                          (pressed || isBusy || isRecording) && styles.actionPressed,
+                        ]}
+                      >
+                        <Icon color="#fff7ef" name="check" size={15} />
+                        <Text style={styles.saveTranscriptLabel}>Save transcript</Text>
+                      </Pressable>
+                    </>
+                  ) : note.transcriptText ? (
                     <Text style={styles.transcriptText}>{note.transcriptText}</Text>
-                  </View>
-                ) : (
-                  <View style={styles.card}>
-                    <Text style={styles.cardLabel}>Transcript</Text>
+                  ) : (
                     <Text style={styles.placeholderText}>
-                      This note will show transcript text after sync and processing.
+                      This note will show live or synced transcript text. You can also add it manually.
                     </Text>
-                  </View>
-                )}
+                  )}
+                </View>
 
                 {note.lastError ? (
                   <NoticeBanner notice={{ tone: 'error', text: note.lastError }} />
@@ -198,7 +280,7 @@ const styles = StyleSheet.create({
     color: '#1f1614',
     fontSize: 28,
     fontWeight: '800',
-    letterSpacing: -0.8,
+    letterSpacing: 0,
     marginTop: 4,
   },
   closeButton: {
@@ -231,7 +313,7 @@ const styles = StyleSheet.create({
     color: '#1d1512',
     fontSize: 24,
     fontWeight: '800',
-    letterSpacing: -0.5,
+    letterSpacing: 0,
   },
   noteMeta: {
     color: '#6d584c',
@@ -264,6 +346,21 @@ const styles = StyleSheet.create({
     color: '#fff7ef',
     fontSize: 15,
     fontWeight: '700',
+  },
+  continueButton: {
+    alignItems: 'center',
+    backgroundColor: '#f4e3dd',
+    borderRadius: 999,
+    flexDirection: 'row',
+    gap: 8,
+    justifyContent: 'center',
+    minHeight: 44,
+    paddingHorizontal: 18,
+  },
+  continueLabel: {
+    color: '#9d4333',
+    fontSize: 14,
+    fontWeight: '800',
   },
   playback: {
     gap: 10,
@@ -301,10 +398,52 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
     textTransform: 'uppercase',
   },
+  cardHeaderRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  editButton: {
+    backgroundColor: '#efe3d6',
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+  },
+  editButtonText: {
+    color: '#6b4338',
+    fontSize: 12,
+    fontWeight: '800',
+  },
   transcriptText: {
     color: '#1f1614',
     fontSize: 15,
     lineHeight: 22,
+  },
+  transcriptInput: {
+    backgroundColor: '#fffdfa',
+    borderColor: 'rgba(154, 126, 110, 0.22)',
+    borderRadius: 8,
+    borderWidth: 1,
+    color: '#1f1614',
+    fontSize: 15,
+    lineHeight: 22,
+    minHeight: 170,
+    padding: 12,
+  },
+  saveTranscriptButton: {
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    backgroundColor: '#93422f',
+    borderRadius: 14,
+    flexDirection: 'row',
+    gap: 8,
+    minHeight: 42,
+    paddingHorizontal: 14,
+  },
+  saveTranscriptLabel: {
+    color: '#fff7ef',
+    fontSize: 13,
+    fontWeight: '800',
   },
   placeholderText: {
     color: '#6d584c',
