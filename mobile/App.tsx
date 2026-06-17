@@ -231,6 +231,7 @@ export default function App() {
   const pulseAnimation = useRef(new Animated.Value(0)).current;
   const shouldListenForSpeechRef = useRef(false);
   const isStartingSpeechRef = useRef(false);
+  const finalizedSpeechTextRef = useRef('');
 
   const activeNote = activeNoteId
     ? savedNotes.find((note) => note.id === activeNoteId) ?? null
@@ -522,13 +523,24 @@ export default function App() {
 
       VoiceRecognizer.onSpeechPartialResults = (event) => {
         const text = event.value?.join(' ') ?? '';
-        setLiveTranscript(text);
-        checkPromptsFromTranscript(text);
+        const transcriptText = [finalizedSpeechTextRef.current, text]
+          .filter(Boolean)
+          .join(' ')
+          .trim();
+        setLiveTranscript(transcriptText);
+        checkPromptsFromTranscript(transcriptText);
       };
       VoiceRecognizer.onSpeechResults = (event) => {
         const text = event.value?.join(' ') ?? '';
-        setLiveTranscript(text);
-        checkPromptsFromTranscript(text);
+        finalizedSpeechTextRef.current = [
+          finalizedSpeechTextRef.current,
+          text,
+        ]
+          .filter(Boolean)
+          .join(' ')
+          .trim();
+        setLiveTranscript(finalizedSpeechTextRef.current);
+        checkPromptsFromTranscript(finalizedSpeechTextRef.current);
       };
       VoiceRecognizer.onSpeechError = () => {
         if (shouldListenForSpeechRef.current) {
@@ -585,6 +597,7 @@ export default function App() {
     setCoveredRecordingPromptIds([]);
     setIsMissingPromptReviewOpen(false);
     setLiveTranscript('');
+    finalizedSpeechTextRef.current = '';
     setLiveSpeechStatus(VoiceRecognizer ? 'idle' : 'unavailable');
     setIsRecorderPaused(false);
 
@@ -653,12 +666,21 @@ export default function App() {
         preferredExtension: RECORDING_OPTIONS.extension,
         transcriptText: liveTranscript,
       });
+
+      if (continuationNote) {
+        await updateVoiceNote(continuationNote.id, {
+          transcriptText: liveTranscript.trim() || continuationNote.transcriptText,
+          lastError: null,
+        });
+      }
+
       await refreshNotes();
       setCurrentTab('notes');
       setIsRecorderOpen(false);
       setCoveredRecordingPromptIds([]);
       setIsMissingPromptReviewOpen(false);
       setLiveTranscript('');
+      finalizedSpeechTextRef.current = '';
       setContinuationNote(null);
     } catch (error) {
       setErrorMessage(
@@ -734,7 +756,9 @@ export default function App() {
     setContinuationNote(note);
     setCoveredRecordingPromptIds([]);
     setIsMissingPromptReviewOpen(false);
-    setLiveTranscript('');
+    setLiveTranscript(note.transcriptText ?? '');
+    finalizedSpeechTextRef.current = note.transcriptText ?? '';
+    checkPromptsFromTranscript(note.transcriptText ?? '');
     setIsRecorderPaused(false);
     setErrorMessage(null);
     setIsRecorderOpen(true);
