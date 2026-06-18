@@ -53,7 +53,9 @@
         {
           "cameraPermission": "Allow FieldNotes to photograph context sheets for OCR import."
         }
-      ]
+      ],
+      "expo-font",
+      "expo-asset"
     ]
   }
 }
